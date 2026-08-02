@@ -1,7 +1,35 @@
 import os
+import urllib.parse
 import flet as ft
 from flet_permission_handler import PermissionHandler, PermissionType
 from payload_sender import send_payload
+
+def resolve_android_path(raw_path: str) -> str:
+    """ Resolve URIs do Android SAF (Storage Access Framework) para caminhos POSIX reais """
+    if not raw_path:
+        return ""
+    
+    decoded = urllib.parse.unquote(raw_path)
+    
+    if os.path.exists(decoded):
+        return decoded
+        
+    # Formato SAF do Android: tree/primary:Download/Subfolder
+    if "primary:" in decoded:
+        rel_path = decoded.split("primary:")[-1].lstrip("/")
+        candidate = os.path.join("/storage/emulated/0", rel_path)
+        return candidate
+
+    if "primary" in decoded and ":" in decoded:
+        rel_path = decoded.split(":")[-1].lstrip("/")
+        candidate = os.path.join("/storage/emulated/0", rel_path)
+        return candidate
+
+    if "/storage/emulated/0/" in decoded:
+        idx = decoded.find("/storage/emulated/0/")
+        return decoded[idx:]
+
+    return decoded
 
 def main(page: ft.Page):
     page.title = "PS5 Payload Sender"
@@ -17,8 +45,6 @@ def main(page: ft.Page):
     # Armazenamento dos Payloads carregados: list of dict {'name': str, 'path': str, 'size': int}
     payload_files = []
 
-    # --- CONTROLES DE INTERFACE ---
-    
     # Header / AppBar
     page.appbar = ft.AppBar(
         leading=ft.Icon(ft.Icons.SPORTS_ESPORTS, color=ft.Colors.BLUE_400),
@@ -30,7 +56,8 @@ def main(page: ft.Page):
 
     # Configuração PS5 IP e Porta
     saved_ip = page.client_storage.get("ps5_ip") or "192.168.1.100"
-    saved_port = page.client_storage.get("ps5_port") or "9021"
+    saved_port = page.client_storage.get("ps5_port") or "9090"
+    saved_folder = page.client_storage.get("payload_folder") or "/storage/emulated/0/Download"
 
     ip_input = ft.TextField(
         label="IP do PS5",
@@ -44,14 +71,23 @@ def main(page: ft.Page):
     port_input = ft.TextField(
         label="Porta",
         value=saved_port,
-        hint_text="Ex: 9090, 9020",
+        hint_text="Ex: 9090",
         prefix_icon=ft.Icons.NUMBERS,
-        width=130,
+        width=120,
         on_change=lambda e: page.client_storage.set("ps5_port", e.control.value)
     )
 
+    folder_input = ft.TextField(
+        label="Caminho da Pasta de Payloads",
+        value=saved_folder,
+        hint_text="Ex: /storage/emulated/0/Download",
+        prefix_icon=ft.Icons.FOLDER,
+        expand=True,
+        on_change=lambda e: page.client_storage.set("payload_folder", e.control.value)
+    )
+
     # Status / Informação do envio
-    status_text = ft.Text("Selecione um payload e clique em Enviar", color=ft.Colors.GREY_400, size=13)
+    status_text = ft.Text("Selecione a pasta ou arquivos para iniciar", color=ft.Colors.GREY_400, size=13)
     progress_ring = ft.ProgressRing(visible=False, width=20, height=20, stroke_width=2)
 
     # Lista contêiner de Payloads
@@ -64,15 +100,14 @@ def main(page: ft.Page):
     # Contador e Filtro
     count_text = ft.Text("Nenhum payload encontrado", size=13, weight=ft.FontWeight.W_500)
     search_input = ft.TextField(
-        hint_text="Filtrar payloads...",
+        hint_text="Filtrar por nome...",
         prefix_icon=ft.Icons.SEARCH,
         dense=True,
         visible=False,
         on_change=lambda e: filter_and_render_list(e.control.value)
     )
 
-    # Campo exibindo o caminho da pasta selecionada
-    folder_path_text = ft.Text("Nenhuma pasta selecionada", color=ft.Colors.GREY_400, size=12, italic=True)
+    folder_path_text = ft.Text("Nenhuma pasta varrida", color=ft.Colors.GREY_400, size=12, italic=True)
 
     def show_snack(msg: str, is_error: bool = False):
         page.open(
@@ -84,8 +119,9 @@ def main(page: ft.Page):
         )
 
     def request_android_permissions():
-        """ Solicita permissões de armazenamento se estiver no Android """
+        """ Solicita permissões de armazenamento (STORAGE e MANAGE_EXTERNAL_STORAGE) """
         try:
+            permission_handler.request_permission(PermissionType.MANAGE_EXTERNAL_STORAGE)
             permission_handler.request_permission(PermissionType.STORAGE)
         except Exception as ex:
             print(f"Solicitação de permissão: {ex}")
@@ -103,17 +139,21 @@ def main(page: ft.Page):
         nonlocal payload_files
         payload_files = []
 
-        if not dir_path or not os.path.exists(dir_path):
-            show_snack("Caminho ou pasta não encontrada!", is_error=True)
+        resolved = resolve_android_path(dir_path)
+        target = resolved if os.path.exists(resolved) else dir_path
+
+        if not target or not os.path.exists(target):
+            show_snack(f"Pasta não encontrada: {target}", is_error=True)
+            folder_path_text.value = f"Não encontrada: {target}"
             render_list()
             return
 
         try:
             valid_exts = (".elf", ".bin")
-            entries = os.listdir(dir_path)
+            entries = os.listdir(target)
             for file_name in sorted(entries, key=lambda s: s.lower()):
                 if file_name.lower().endswith(valid_exts):
-                    full_p = os.path.join(dir_path, file_name)
+                    full_p = os.path.join(target, file_name)
                     if os.path.isfile(full_p):
                         try:
                             sz = os.path.getsize(full_p)
@@ -125,12 +165,14 @@ def main(page: ft.Page):
                             "size": sz
                         })
 
-            folder_path_text.value = f"Pasta: {dir_path}"
+            folder_input.value = target
+            page.client_storage.set("payload_folder", target)
+            folder_path_text.value = f"Pasta ativa: {target}"
             search_input.visible = len(payload_files) > 5
             render_list()
             show_snack(f"Encontrados {len(payload_files)} payloads!")
         except Exception as err:
-            show_snack(f"Erro ao ler pasta: {str(err)}", is_error=True)
+            show_snack(f"Erro ao ler pasta ({target}): {str(err)}", is_error=True)
 
     def render_list(filtered_items=None):
         payloads_list.controls.clear()
@@ -142,7 +184,7 @@ def main(page: ft.Page):
                 ft.Container(
                     content=ft.Column([
                         ft.Icon(ft.Icons.FOLDER_OFF_OUTLINED, size=48, color=ft.Colors.GREY_600),
-                        ft.Text("Nenhum arquivo .elf ou .bin encontrado nesta pasta.", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER)
+                        ft.Text("Nenhum arquivo .elf ou .bin encontrado.", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER)
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                     padding=20
                 )
@@ -216,8 +258,9 @@ def main(page: ft.Page):
     # Callback do FilePicker para Seleção de Diretório ou Arquivos
     def on_file_picker_result(e: ft.FilePickerResultEvent):
         if e.path:
-            # Pasta Selecionada
-            scan_directory(e.path)
+            # Resolve o URI SAF retornado pelo Android
+            resolved = resolve_android_path(e.path)
+            scan_directory(resolved)
         elif e.files:
             # Arquivos Selecionados Diretamente
             nonlocal payload_files
@@ -249,6 +292,10 @@ def main(page: ft.Page):
             dialog_title="Selecione os Payloads (.elf ou .bin)"
         )
 
+    def preset_click(path: str):
+        folder_input.value = path
+        scan_directory(path)
+
     # UI LAYOUT
 
     # Card Conexão PS5
@@ -278,8 +325,22 @@ def main(page: ft.Page):
                 ]),
                 folder_path_text,
                 ft.Row([
+                    folder_input,
+                    ft.IconButton(
+                        icon=ft.Icons.REFRESH,
+                        tooltip="Varrer Pasta",
+                        on_click=lambda _: scan_directory(folder_input.value)
+                    )
+                ]),
+                # Atalhos rápidos de pastas no Android
+                ft.Row([
+                    ft.Text("Atalhos:", size=12, color=ft.Colors.GREY_400),
+                    ft.TextButton("Download", on_click=lambda _: preset_click("/storage/emulated/0/Download")),
+                    ft.TextButton("Documents", on_click=lambda _: preset_click("/storage/emulated/0/Documents")),
+                ]),
+                ft.Row([
                     ft.ElevatedButton(
-                        "Escolher Pasta",
+                        "Abrir Seletor de Pasta",
                         icon=ft.Icons.FOLDER_OPEN,
                         style=ft.ButtonStyle(color=ft.Colors.AMBER_200),
                         on_click=pick_folder_click,
@@ -316,6 +377,10 @@ def main(page: ft.Page):
         search_input,
         payloads_list
     )
+
+    # Se a pasta salva existir ao iniciar, carrega automaticamente
+    if os.path.exists(saved_folder):
+        scan_directory(saved_folder)
 
 if __name__ == "__main__":
     ft.app(target=main)
