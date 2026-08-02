@@ -135,7 +135,7 @@ def main(page: ft.Page):
             return f"{size_bytes / (1024 * 1024):.2f} MB"
 
     def scan_directory(dir_path: str):
-        """ Varre a pasta fornecida em busca de arquivos .elf e .bin """
+        """Varre a pasta e suas subpastas em busca de arquivos .elf e .bin."""
         nonlocal payload_files
         payload_files = []
 
@@ -150,20 +150,25 @@ def main(page: ft.Page):
 
         try:
             valid_exts = (".elf", ".bin")
-            entries = os.listdir(target)
-            for file_name in sorted(entries, key=lambda s: s.lower()):
-                if file_name.lower().endswith(valid_exts):
-                    full_p = os.path.join(target, file_name)
-                    if os.path.isfile(full_p):
-                        try:
-                            sz = os.path.getsize(full_p)
-                        except Exception:
-                            sz = 0
-                        payload_files.append({
-                            "name": file_name,
-                            "path": full_p,
-                            "size": sz
-                        })
+            for current_dir, _, file_names in os.walk(target):
+                for file_name in file_names:
+                    if not file_name.lower().endswith(valid_exts):
+                        continue
+
+                    full_path = os.path.join(current_dir, file_name)
+                    relative_path = os.path.relpath(full_path, target)
+                    try:
+                        size = os.path.getsize(full_path)
+                    except OSError:
+                        size = 0
+
+                    payload_files.append({
+                        "name": relative_path,
+                        "path": full_path,
+                        "size": size,
+                    })
+
+            payload_files.sort(key=lambda item: item["name"].lower())
 
             folder_input.value = target
             page.client_storage.set("payload_folder", target)
@@ -193,7 +198,13 @@ def main(page: ft.Page):
             count_text.value = f"Total: {len(items)} payload(s)"
             for item in items:
                 ext = os.path.splitext(item["name"])[1].lower()
-                icon = ft.Icons.TERMINAL if ext == ".elf" else ft.Icons.MEMORY
+                icon = ft.Icons.TERMINAL 
+                if ext == ".elf":
+                    icon = ft.Icons.TERMINAL 
+                elif ext == ".js":
+                    icon = ft.Icons.TERMINAL 
+                else:
+                    ft.Icons.MEMORY
                 icon_color = ft.Colors.AMBER_400 if ext == ".elf" else ft.Colors.CYAN_400
 
                 payloads_list.controls.append(

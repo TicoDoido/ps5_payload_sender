@@ -39,7 +39,7 @@ jobs:
 
       - name: Compilar APK Android via Flet
         run: |
-          flet build apk --verbose
+          flet build apk --verbose --project "Payload Sender"
 
       - name: Salvar APK como Artefato no GitHub
         uses: actions/upload-artifact@v4
