@@ -1,5 +1,7 @@
 # PS5 Payload Sender
 
+![Tela principal](screenshots/exemple.png)
+
 Aplicativo Android feito com [Flet](https://flet.dev/) para localizar e enviar payloads para um receptor TCP em um PS5 na mesma rede.
 
 ## Recursos
