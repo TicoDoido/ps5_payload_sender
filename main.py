@@ -56,7 +56,7 @@ def main(page: ft.Page):
 
     # Configuração PS5 IP e Porta
     saved_ip = page.client_storage.get("ps5_ip") or "192.168.1.100"
-    saved_port = page.client_storage.get("ps5_port") or "9090"
+    saved_port = page.client_storage.get("ps5_port") or "9021"
     saved_folder = page.client_storage.get("payload_folder") or "/storage/emulated/0/Download"
 
     ip_input = ft.TextField(
@@ -71,7 +71,7 @@ def main(page: ft.Page):
     port_input = ft.TextField(
         label="Porta",
         value=saved_port,
-        hint_text="Ex: 9090",
+        hint_text="Ex: 9021",
         prefix_icon=ft.Icons.NUMBERS,
         width=120,
         on_change=lambda e: page.client_storage.set("ps5_port", e.control.value)
