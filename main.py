@@ -135,7 +135,7 @@ def main(page: ft.Page):
             return f"{size_bytes / (1024 * 1024):.2f} MB"
 
     def scan_directory(dir_path: str):
-        """Varre a pasta e suas subpastas em busca de arquivos .elf e .bin."""
+        """Varre a pasta e suas subpastas em busca de arquivos .elf, .bin e .js."""
         nonlocal payload_files
         payload_files = []
 
@@ -149,7 +149,7 @@ def main(page: ft.Page):
             return
 
         try:
-            valid_exts = (".elf", ".bin")
+            valid_exts = (".elf", ".bin", ".js")
             for current_dir, _, file_names in os.walk(target):
                 for file_name in file_names:
                     if not file_name.lower().endswith(valid_exts):
@@ -184,12 +184,12 @@ def main(page: ft.Page):
         items = filtered_items if filtered_items is not None else payload_files
 
         if not items:
-            count_text.value = "Nenhum payload (.elf / .bin) encontrado."
+            count_text.value = "Nenhum payload (.elf / .bin / .js) encontrado."
             payloads_list.controls.append(
                 ft.Container(
                     content=ft.Column([
                         ft.Icon(ft.Icons.FOLDER_OFF_OUTLINED, size=48, color=ft.Colors.GREY_600),
-                        ft.Text("Nenhum arquivo .elf ou .bin encontrado.", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER)
+                        ft.Text("Nenhum arquivo .elf, .bin ou .js encontrado.", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER)
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                     padding=20
                 )
@@ -198,14 +198,15 @@ def main(page: ft.Page):
             count_text.value = f"Total: {len(items)} payload(s)"
             for item in items:
                 ext = os.path.splitext(item["name"])[1].lower()
-                icon = ft.Icons.TERMINAL 
                 if ext == ".elf":
-                    icon = ft.Icons.TERMINAL 
+                    icon = ft.Icons.TERMINAL
+                    icon_color = ft.Colors.AMBER_400
                 elif ext == ".js":
-                    icon = ft.Icons.TERMINAL 
+                    icon = ft.Icons.DESCRIPTION
+                    icon_color = ft.Colors.GREEN_400
                 else:
-                    ft.Icons.MEMORY
-                icon_color = ft.Colors.AMBER_400 if ext == ".elf" else ft.Colors.CYAN_400
+                    icon = ft.Icons.MEMORY
+                    icon_color = ft.Colors.CYAN_400
 
                 payloads_list.controls.append(
                     ft.Card(
@@ -276,7 +277,7 @@ def main(page: ft.Page):
             # Arquivos Selecionados Diretamente
             nonlocal payload_files
             payload_files = []
-            valid_exts = (".elf", ".bin")
+            valid_exts = (".elf", ".bin", ".js")
             for f in e.files:
                 if f.name.lower().endswith(valid_exts):
                     payload_files.append({
@@ -293,14 +294,14 @@ def main(page: ft.Page):
 
     def pick_folder_click(_):
         request_android_permissions()
-        file_picker.get_directory_path(dialog_title="Selecione a pasta com os Payloads (.elf / .bin)")
+        file_picker.get_directory_path(dialog_title="Selecione a pasta com os Payloads (.elf / .bin / .js)")
 
     def pick_files_click(_):
         request_android_permissions()
         file_picker.pick_files(
             allow_multiple=True,
-            allowed_extensions=["elf", "bin"],
-            dialog_title="Selecione os Payloads (.elf ou .bin)"
+            allowed_extensions=["elf", "bin", "js"],
+            dialog_title="Selecione os Payloads (.elf, .bin ou .js)"
         )
 
     def preset_click(path: str):
@@ -332,7 +333,7 @@ def main(page: ft.Page):
             content=ft.Column([
                 ft.Row([
                     ft.Icon(ft.Icons.FOLDER_SPECIAL, color=ft.Colors.AMBER_400),
-                    ft.Text("Payloads (.elf / .bin)", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Payloads (.elf / .bin / .js)", size=16, weight=ft.FontWeight.BOLD),
                 ]),
                 folder_path_text,
                 ft.Row([
