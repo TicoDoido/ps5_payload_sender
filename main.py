@@ -10,7 +10,7 @@ from flet_permission_handler import PermissionHandler, PermissionType
 from payload_sender import send_payload
 from ps5_ftp import FTPEntry, PS5FTPClient
 from ps5_media import build_capture_details
-from jxr_preview import build_jxr_viewer_html, decode_jpeg_preview_base64
+from jxr_preview import (build_jxr_viewer_html, decode_jpeg_preview_base64, decode_png_preview_base64)
 from jxr_thumbnails import build_jxr_thumbnails_html
 
 try:
@@ -59,6 +59,7 @@ def main(page: ft.Page):
     gallery_thumb_completed: set[str] = set()
     gallery_thumb_root = ""
     gallery_thumb_webview = None
+    gallery_preview_pending: dict[str, dict] = {}
 
     page.appbar = ft.AppBar(
         leading=ft.Icon(ft.Icons.SPORTS_ESPORTS, color=ft.Colors.BLUE_400),
@@ -450,7 +451,7 @@ def main(page: ft.Page):
     video_root_input = ft.TextField(label="Pasta de vídeos", value="/user/av_contents/video/NPXS40087", expand=True)
     gallery_status = ft.Text("Conecte ao FTP e carregue Fotos ou Vídeos.", size=12, color=ft.Colors.GREY_400)
     gallery_count = ft.Text("", size=12, color=ft.Colors.GREY_400)
-    gallery_grid = ft.GridView(controls=[], max_extent=175, child_aspect_ratio=0.82, spacing=10, run_spacing=10, height=510)
+    gallery_grid = ft.GridView(controls=[], max_extent=210, child_aspect_ratio=0.50, spacing=12, run_spacing=14, height=680)
 
     def cache_media(entry: FTPEntry) -> str:
         cache_dir = os.path.join(tempfile.gettempdir(), "ps5_payload_sender_cache")
@@ -470,30 +471,27 @@ def main(page: ft.Page):
         except Exception as ex:
             show_snack(f"Falha ao baixar captura: {ex}", is_error=True)
 
-    def save_jxr_preview(entry: FTPEntry, event):
-        message = getattr(event, "message", "") or ""
-        prefix = "PS5_JXR_SAVE:"
-        if not message.startswith(prefix):
-            return
+    def close_jxr_preview(token: str, dialog):
+        gallery_preview_pending.pop(token, None)
+        page.close(dialog)
 
-        local_path = ""
-        partial_path = ""
+    def save_jxr_preview_png(token: str):
+        pending = gallery_preview_pending.get(token)
+        if not pending:
+            show_snack("A pr?via n?o est? mais dispon?vel.", is_error=True)
+            return
+        if gallery_thumb_webview is None:
+            show_snack("O conversor JXR n?o est? dispon?vel neste aparelho.", is_error=True)
+            return
+        pending["status"].value = "Gerando PNG SDR da prévia…"
+        pending["save_button"].disabled = True
+        page.update()
         try:
-            jpeg_data = decode_jpeg_preview_base64(message[len(prefix):].strip())
-            jpeg_name = os.path.splitext(entry.name)[0] + ".jpg"
-            local_path = unique_download_path(jpeg_name)
-            partial_path = local_path + ".part"
-            with open(partial_path, "wb") as output:
-                output.write(jpeg_data)
-            os.replace(partial_path, local_path)
-            show_snack(f"Prévia JPEG salva no celular: {local_path}")
+            gallery_thumb_webview.run_javascript("window.ps5SavePng()")
         except Exception as ex:
-            if partial_path and os.path.exists(partial_path):
-                try:
-                    os.remove(partial_path)
-                except OSError:
-                    pass
-            show_snack(f"Falha ao salvar a prévia JPEG: {ex}", is_error=True)
+            pending["save_button"].disabled = False
+            pending["status"].value = f"N?o foi poss?vel exportar o PNG: {ex}"
+            page.update()
 
     def preview_capture(entry: FTPEntry):
         ext = os.path.splitext(entry.name)[1].lower()
@@ -504,36 +502,83 @@ def main(page: ft.Page):
             title_id = str(details.get("title_id", ""))
             captured_at = str(details.get("captured_at", ""))
             app_version = str(details.get("app_version", ""))
-            jxr_html = None
-            jxr_viewer = None
+
+            if ext == ".jxr" and FletWebView is not None and page.platform == ft.PagePlatform.ANDROID and gallery_thumb_webview is not None:
+                token = hashlib.sha1(
+                    (entry.path + str(os.path.getsize(local_path))).encode("utf-8", errors="replace")
+                ).hexdigest()[:20]
+                jxr_html = build_jxr_viewer_html(local_path, entry.name, result_token=token)
+                preview_image = ft.Image(
+                    src="", width=340, height=320, fit=ft.ImageFit.CONTAIN,
+                    visible=False,
+                    error_content=ft.Text("N?o foi poss?vel exibir a imagem convertida."),
+                )
+                preview_progress = ft.ProgressRing(width=28, height=28, stroke_width=3)
+                preview_status = ft.Text(
+                    "Decodificando a captura JXR 4K e preparando uma pr?via compat?vel?",
+                    size=12, text_align=ft.TextAlign.CENTER,
+                )
+                save_button = ft.ElevatedButton(
+                    "Salvar PNG SDR no celular", icon=ft.Icons.IMAGE,
+                    disabled=True,
+                    on_click=lambda _, t=token: save_jxr_preview_png(t),
+                )
+                info_text = "\n".join(line for line in [
+                    game_name or title_id or "Jogo n?o identificado",
+                    captured_at,
+                    f"Vers?o do jogo: {app_version}" if app_version else "",
+                    format_size(entry.size),
+                ] if line)
+                dialog = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text(game_name or entry.name, max_lines=2),
+                    content=ft.Column([
+                        ft.Row([preview_progress, preview_status], alignment=ft.MainAxisAlignment.CENTER),
+                        preview_image,
+                        ft.Text(info_text, size=11, color=ft.Colors.GREY_400),
+                    ], tight=True, scroll=ft.ScrollMode.AUTO,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    actions=[
+                        ft.TextButton("Fechar", on_click=lambda _, t=token, d=None: close_jxr_preview(t, dialog)),
+                        save_button,
+                        ft.OutlinedButton(
+                            "Baixar JXR original", icon=ft.Icons.DOWNLOAD,
+                            on_click=lambda _, item=entry: download_capture(item),
+                        ),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                gallery_preview_pending[token] = {
+                    "entry": entry,
+                    "image": preview_image,
+                    "progress": preview_progress,
+                    "status": preview_status,
+                    "save_button": save_button,
+                    "dialog": dialog,
+                }
+                page.open(dialog)
+                try:
+                    gallery_thumb_webview.load_html(jxr_html)
+                except Exception as ex:
+                    preview_progress.visible = False
+                    preview_status.value = f"Falha ao iniciar a convers?o JXR: {ex}"
+                    page.update()
+                return
+
             if ext in (".jpg", ".jpeg", ".png"):
                 preview = ft.Image(
-                    src=local_path,
-                    width=340,
-                    height=390,
+                    src=local_path, width=340, height=390,
                     fit=ft.ImageFit.CONTAIN,
-                    error_content=ft.Text("Não foi possível exibir a imagem neste aparelho."),
+                    error_content=ft.Text("N?o foi poss?vel exibir a imagem neste aparelho."),
                 )
             elif ext == ".jxr":
-                if FletWebView is not None and page.platform == ft.PagePlatform.ANDROID:
-                    jxr_html = build_jxr_viewer_html(local_path, entry.name)
-                    jxr_viewer = FletWebView(
-                        url="about:blank",
-                        enable_javascript=True,
-                        width=340,
-                        height=440,
-                        on_console_message=lambda event, item=entry: save_jxr_preview(item, event),
-                    )
-                    preview = jxr_viewer
-                else:
-                    preview = ft.Column([
-                        ft.Icon(ft.Icons.HDR_ON, size=48, color=ft.Colors.AMBER_300),
-                        ft.Text(
-                            "A prévia JPEG XR está disponível no APK Android. "
-                            "No ambiente atual, o arquivo original pode ser baixado.",
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True)
+                preview = ft.Column([
+                    ft.Icon(ft.Icons.HDR_ON, size=48, color=ft.Colors.AMBER_300),
+                    ft.Text(
+                        "JPEG XR ? o arquivo HDR original. A pr?via convertida est? dispon?vel no APK Android.",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True)
             elif ext in (".mp4", ".webm"):
                 preview = ft.Video(
                     playlist=[ft.VideoMedia(resource=local_path)],
@@ -541,12 +586,12 @@ def main(page: ft.Page):
                     autoplay=False, show_controls=True,
                 )
             else:
-                preview = ft.Text("Formato sem pré-visualização disponível.")
+                preview = ft.Text("Formato sem pr?-visualiza??o dispon?vel.")
 
             capture_info = [
-                game_name or title_id or "Jogo não identificado",
+                game_name or title_id or "Jogo n?o identificado",
                 captured_at,
-                f"Versão do jogo: {app_version}" if app_version else "",
+                f"Vers?o do jogo: {app_version}" if app_version else "",
                 format_size(entry.size),
                 entry.path,
             ]
@@ -566,10 +611,8 @@ def main(page: ft.Page):
                 actions_alignment=ft.MainAxisAlignment.END,
             )
             page.open(dialog)
-            if jxr_viewer is not None and jxr_html is not None:
-                jxr_viewer.load_html(jxr_html)
         except Exception as ex:
-            show_snack(f"Não foi possível abrir a captura: {ex}", is_error=True)
+            show_snack(f"N?o foi poss?vel abrir a captura: {ex}", is_error=True)
 
     def update_gallery_count():
         title_ids = {
@@ -605,7 +648,7 @@ def main(page: ft.Page):
             sidecar_label = " + ".join(sidecars) if sidecars else "sem sidecars"
             if thumbnail_path:
                 media_preview = ft.Image(
-                    src=thumbnail_path, width=132, height=82,
+                    src=thumbnail_path, width=148, height=104,
                     fit=ft.ImageFit.CONTAIN,
                 )
             else:
@@ -634,15 +677,82 @@ def main(page: ft.Page):
                             on_click=lambda _, item=entry: download_capture(item),
                         ),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=2),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=5),
-                padding=8,
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                padding=10,
             )))
         update_gallery_count()
         page.update()
 
     def on_gallery_thumb_console(event):
         message = getattr(event, "message", "") or ""
-        if message.startswith("PS5_THUMB:"):
+        if message.startswith("PS5_JXR_PREVIEW:"):
+            token = ""
+            try:
+                _, token, payload = message.split(":", 2)
+                pending = gallery_preview_pending.get(token)
+                if not pending:
+                    return
+                jpeg_data = decode_jpeg_preview_base64(payload.strip())
+                cache_dir = os.path.join(tempfile.gettempdir(), "ps5_payload_sender_cache")
+                os.makedirs(cache_dir, exist_ok=True)
+                local_path = os.path.join(cache_dir, token + "_full_preview.jpg")
+                partial_path = local_path + ".part"
+                with open(partial_path, "wb") as output:
+                    output.write(jpeg_data)
+                os.replace(partial_path, local_path)
+                pending["image"].src = local_path
+                pending["image"].visible = True
+                pending["progress"].visible = False
+                pending["status"].value = "Prévia SDR pronta (até 1280×720). O JXR HDR original continua intacto."
+                pending["save_button"].disabled = False
+                pending["preview_path"] = local_path
+                page.update()
+            except Exception as ex:
+                pending = gallery_preview_pending.get(token) if token else None
+                if pending:
+                    pending["progress"].visible = False
+                    pending["status"].value = f"Falha na pr?via JXR: {ex}"
+                    page.update()
+                else:
+                    show_snack(f"Falha ao montar a pr?via JXR: {ex}", is_error=True)
+        elif message.startswith("PS5_JXR_SAVE_PNG:"):
+            token = ""
+            try:
+                _, token, payload = message.split(":", 2)
+                pending = gallery_preview_pending.get(token)
+                if not pending:
+                    return
+                png_data = decode_png_preview_base64(payload.strip())
+                entry = pending["entry"]
+                file_name = os.path.splitext(entry.name)[0] + ".png"
+                local_path = unique_download_path(file_name)
+                partial_path = local_path + ".part"
+                with open(partial_path, "wb") as output:
+                    output.write(png_data)
+                os.replace(partial_path, local_path)
+                pending["save_button"].disabled = False
+                pending["status"].value = f"PNG salvo no celular: {local_path}"
+                show_snack(f"PNG salvo em: {local_path}")
+                page.update()
+            except Exception as ex:
+                pending = gallery_preview_pending.get(token) if token else None
+                if pending:
+                    pending["save_button"].disabled = False
+                    pending["status"].value = f"Falha ao salvar PNG: {ex}"
+                    page.update()
+                else:
+                    show_snack(f"Falha ao salvar PNG: {ex}", is_error=True)
+        elif message.startswith("PS5_JXR_ERROR:"):
+            try:
+                _, token, error_text = message.split(":", 2)
+                pending = gallery_preview_pending.get(token)
+                if pending:
+                    pending["progress"].visible = False
+                    pending["status"].value = f"O decoder n?o conseguiu abrir a captura: {error_text}"
+                    page.update()
+            except ValueError:
+                pass
+        elif message.startswith("PS5_THUMB:"):
             try:
                 _, token, payload = message.split(":", 2)
                 entry_path = gallery_thumb_lookup.get(token)

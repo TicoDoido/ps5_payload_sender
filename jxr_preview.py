@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 
 
-def build_jxr_viewer_html(jxr_path: str, display_name: str | None = None) -> str:
+def build_jxr_viewer_html(
+    jxr_path: str, display_name: str | None = None, result_token: str = "preview"
+) -> str:
     """Build a self-contained WebView page that decodes a PS5 JPEG XR capture.
 
     The bundled jpegxr.js is a single-file WebAssembly build of the BSD-licensed
@@ -19,6 +21,8 @@ def build_jxr_viewer_html(jxr_path: str, display_name: str | None = None) -> str
 
     if path.stat().st_size > 40 * 1024 * 1024:
         raise ValueError("A captura JXR excede o limite de 40 MB para pré-visualização.")
+    if not result_token or not result_token.isalnum() or len(result_token) > 40:
+        raise ValueError("Invalid preview token.")
 
     bundle_path = Path(__file__).resolve().parent / "assets" / "jpegxr.js"
     if not bundle_path.is_file():
@@ -44,7 +48,6 @@ body { display:flex; flex-direction:column; align-items:center; gap:10px; paddin
 #name { width:100%; font-size:13px; color:#d4d4d8; overflow-wrap:anywhere; text-align:center; }
 #status { width:100%; min-height:36px; color:#a1a1aa; font-size:12px; text-align:center; }
 #preview { max-width:100%; max-height:66vh; width:auto; height:auto; object-fit:contain; background:#050505; }
-#save { border:0; border-radius:8px; padding:10px 18px; color:#fff; background:#2563eb; font-size:14px; }
 #error { color:#fca5a5; font-size:12px; white-space:pre-wrap; text-align:center; }
 </style>
 </head>
@@ -52,7 +55,6 @@ body { display:flex; flex-direction:column; align-items:center; gap:10px; paddin
 <div id="name">__DISPLAY_NAME__</div>
 <div id="status">Baixando e decodificando a captura HDR…</div>
 <canvas id="preview"></canvas>
-<button id="save" hidden>Salvar JPEG no celular</button>
 <div id="error"></div>
 <script>
 __DECODER_JS__
@@ -63,7 +65,6 @@ __DECODER_JS__
   const status = document.getElementById("status");
   const errorBox = document.getElementById("error");
   const canvas = document.getElementById("preview");
-  const saveButton = document.getElementById("save");
   let jpegUrl = "";
 
   function fail(message) {
@@ -203,17 +204,21 @@ __DECODER_JS__
     }
 
     context.putImageData(pixels, 0, 0);
-    jpegUrl = canvas.toDataURL("image/jpeg", 0.92);
-    status.textContent = "Prévia JPEG pronta · " + outWidth + " × " + outHeight +
-                         (hdr ? " · HDR convertido para SDR" : "");
-    saveButton.hidden = false;
-    saveButton.addEventListener("click", function () {
-      const jpegBase64 = jpegUrl.split(",", 2)[1];
-      status.textContent = "Enviando JPEG para o armazenamento do celular…";
-      console.log("PS5_JXR_SAVE:" + jpegBase64);
-    });
+    jpegUrl = canvas.toDataURL("image/jpeg", 0.90);
+    status.textContent = "Prévia SDR pronta · " + outWidth + " × " + outHeight +
+                         (hdr ? " · HDR convertido para SDR" : " · SDR");
+    console.log("PS5_JXR_PREVIEW:__RESULT_TOKEN__:" + jpegUrl.split(",", 2)[1]);
+
+    // Invoked by the native Flet button; PNG is lossless at the reduced SDR preview resolution.
+    window.ps5SavePng = function () {
+      status.textContent = "Gerando PNG SDR…";
+      const pngBase64 = canvas.toDataURL("image/png").split(",", 2)[1];
+      console.log("PS5_JXR_SAVE_PNG:__RESULT_TOKEN__:" + pngBase64);
+    };
   } catch (error) {
-    fail(error && error.message ? error.message : String(error));
+    const message = error && error.message ? error.message : String(error);
+    fail(message);
+    console.log("PS5_JXR_ERROR:__RESULT_TOKEN__:" + message);
   }
 })();
 </script>
@@ -225,6 +230,7 @@ __DECODER_JS__
         page.replace("__DISPLAY_NAME__", safe_name)
         .replace("__DECODER_JS__", decoder_js)
         .replace("__JXR_BASE64__", jxr_b64)
+        .replace("__RESULT_TOKEN__", result_token)
     )
 
 
@@ -238,4 +244,17 @@ def decode_jpeg_preview_base64(payload: str) -> bytes:
         raise ValueError("O WebView enviou dados JPEG inválidos.") from exc
     if len(data) < 4 or not data.startswith(b"\xff\xd8\xff"):
         raise ValueError("O conteúdo recebido não é um JPEG válido.")
+    return data
+
+
+def decode_png_preview_base64(payload: str) -> bytes:
+    """Validate and decode a PNG emitted by the local WebView preview."""
+    if not payload or len(payload) > 24 * 1024 * 1024:
+        raise ValueError("Preview PNG is empty or exceeds the allowed size.")
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise ValueError("The WebView sent invalid PNG data.") from exc
+    if len(data) < 24 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("The received content is not a valid PNG.")
     return data

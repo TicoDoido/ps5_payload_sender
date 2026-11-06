@@ -50,6 +50,12 @@ class MobileLayoutTests(unittest.TestCase):
         self.assertEqual(len(tabs.tabs), 3)
         self.assertTrue(all(tab.content is not None for tab in tabs.tabs))
 
+        gallery = tabs.tabs[2].content
+        grid = next(control for control in gallery.controls if isinstance(control, ft.GridView))
+        self.assertLessEqual(grid.child_aspect_ratio, 0.52)
+        self.assertGreaterEqual(grid.height, 650)
+        self.assertGreaterEqual(grid.max_extent, 200)
+
         for tab in tabs.tabs:
             self.assertIsInstance(tab.content, ft.Column)
             self.assertEqual(tab.content.scroll, ft.ScrollMode.AUTO)
