@@ -40,9 +40,12 @@ def resolve_android_path(raw_path: str) -> str:
 def main(page: ft.Page):
     page.title = "PS5 Payload Sender"
     page.theme_mode = ft.ThemeMode.DARK
-    page.padding = 16
-    page.spacing = 12
-    page.scroll = ft.ScrollMode.AUTO
+    page.padding = 12
+    page.spacing = 0
+    # Tabs/expanded content need a bounded viewport. Scrolling the Page itself
+    # wraps its children in an unbounded scroll view and can collapse the tab
+    # body to zero height on Android. Each tab owns its own scroll container.
+    page.scroll = None
 
     permission_handler = PermissionHandler()
     page.overlay.append(permission_handler)
@@ -94,7 +97,7 @@ def main(page: ft.Page):
 
     status_text = ft.Text("Selecione a pasta ou os arquivos para iniciar.", color=ft.Colors.GREY_400, size=13)
     progress_ring = ft.ProgressRing(visible=False, width=20, height=20, stroke_width=2)
-    payloads_list = ft.ListView(spacing=8, divider_thickness=1)
+    payloads_list = ft.ListView(spacing=8, divider_thickness=1, height=320)
     count_text = ft.Text("Nenhum payload encontrado", size=13, weight=ft.FontWeight.W_500)
     folder_path_text = ft.Text("Nenhuma pasta varrida", color=ft.Colors.GREY_400, size=12, italic=True)
     search_input = ft.TextField(hint_text="Filtrar por nome...", prefix_icon=ft.Icons.SEARCH, dense=True, visible=False)
@@ -801,7 +804,8 @@ def main(page: ft.Page):
         expand=1,
         animation_duration=180,
     )
-    page.add(tabs)
+    # Give the TabView a bounded, full-height parent on mobile and desktop.
+    page.add(ft.Column([tabs], expand=True, spacing=0))
 
     if os.path.exists(saved_folder):
         scan_directory(saved_folder)
