@@ -1,8 +1,10 @@
 [tool.flet]
 name = "PS5 Payload Sender"
 org = "com.ps5.payloadsender"
-description = "Enviador de Payloads ELF e BIN para PS5 em Android"
+description = "Enviador de payloads e gerenciador FTP/galeria para PS5 em Android"
 
 [tool.flet.android.permission]
+"android.permission.INTERNET" = true
+"android.permission.ACCESS_NETWORK_STATE" = true
 "android.permission.MANAGE_EXTERNAL_STORAGE" = true
 "android.permission.READ_EXTERNAL_STORAGE" = true

@@ -1,49 +1,67 @@
 # PS5 Payload Sender
 
-![Tela principal](screenshots/exemple.png)
+Aplicativo Android em Flet para enviar payloads ao PS5, transferir arquivos por FTP e consultar/baixar capturas.
 
-Aplicativo Android feito com [Flet](https://flet.dev/) para localizar e enviar payloads para um receptor TCP em um PS5 na mesma rede.
+## Fun??es
 
-## Recursos
+### Payloads
+- Varre uma pasta e suas subpastas para localizar arquivos `.elf`, `.bin` e `.js`.
+- Permite selecionar um ou v?rios arquivos pelo seletor do Android.
+- Envia os bytes originais diretamente por TCP ao IP/porta configurados, em blocos de 1 MiB, sem cabe?alho ou prefixo adicional.
+- Porta sugerida para ELF loader: `9021`.
 
-- Varre uma pasta e suas subpastas.
-- Lista arquivos `.elf`, `.bin` e `.js`.
-- Permite escolher vários arquivos manualmente.
-- Exibe o tamanho e o caminho relativo de cada payload.
-- Permite configurar IP e porta do receptor.
-- Salva o último IP, porta e pasta utilizados.
+### FTP
+- IP FTP inicial independente do IP de envio de payload: `192.168.15.4` (edit?vel e salvo separadamente). Porta inicial: `2121`; usu?rio inicial: `anonymous`.
+- Navega por pastas, lista arquivos e permite enviar/baixar arquivos entre o telefone e o PS5.
+- Porta, usu?rio, senha e diret?rio remoto podem ser alterados na interface.
+- FTP convencional n?o cifra os dados; use somente em uma rede local confi?vel.
 
-## Uso
+### Capturas
+- Lista fotos (`JXR`, `JPG`, `PNG`) e v?deos (`MP4`, `WebM`) nas pastas `av_contents` do PS5.
+- Agrupa cada m?dia com os arquivos `.dat` e `.meta` de mesmo nome-base, sem listar os sidecars como capturas separadas.
+- L? o nome do jogo do `.dat`, e a data/vers?o do jogo do `.meta`.
+- Mostra miniaturas JPEG nativas dos v?deos e converte as miniaturas JPEG XR das fotos no pr?prio celular; os layouts RGB de 8-bit e RGB101010 de 10-bit s?o suportados.
+- Abre fotos JXR em um WebView Android, converte uma vers?o de visualiza??o para JPEG/SDR e oferece um bot?o para salvar esse JPEG no telefone.
+- A a??o de download separada baixa o `.jxr` original; os arquivos do PS5 n?o s?o modificados.
+- Diret?rio inicial de fotos: `/user/av_contents/photo/NPXS40087`.
+- Diret?rio inicial de v?deos: `/user/av_contents/video/NPXS40087`.
 
-1. Conecte o celular e o PS5 à mesma rede local.
-2. Informe o IP do PS5 e a porta em que o receptor está escutando.
-3. Toque em **Abrir Seletor de Pasta** ou **Escolher Arquivos**.
-4. Se escolher uma pasta, permita o acesso a todos os arquivos quando o Android solicitar.
-5. Toque em **Enviar** ao lado do payload desejado.
+Os diret?rios s?o edit?veis na interface. `NPXS40087` ? o identificador observado neste PS5 e pode variar em outros consoles/ambientes.
 
-> A porta depende do payload/receptor em execução no PS5. O aplicativo não presume uma porta única; informe a porta correta antes de enviar.
+## Requisitos
 
-## Executar localmente
+- Python 3.10 ou superior.
+- `flet==0.28.3`
+- `flet-permission-handler==0.1.0`
+- `flet-webview==0.1.0`
+- Flutter 3.29.2 ou compat?vel com o Flet CLI instalado.
+- JDK 17 e Android SDK (com as licen?as aceitas pelo operador).
 
-Requer Python 3.10 ou superior.
+## Execu??o local
 
 ```bash
 pip install -r requirements.txt
 flet run main.py
 ```
 
-## Gerar APK Android
+## APK Android
 
 ```bash
-flet build apk
+flet build apk --output build/apk
 ```
 
-Após instalar uma nova versão do APK, abra o seletor de pasta e conceda a permissão de gerenciamento de arquivos. Essa permissão é necessária para que o Android permita varrer os arquivos da pasta selecionada.
+O projeto solicita permiss?es de rede e acesso ao armazenamento. No primeiro uso, conceda as permiss?es apresentadas pelo Android para que o app possa salvar arquivos em `Download/PS5 Captures`.
 
-## Créditos
+## Testes
 
-O envio TCP em [payload_sender.py](payload_sender.py) foi baseado no [`payload_sender.py` do projeto Y2JB](https://github.com/Gezine/Y2JB/blob/main/payload_sender.py), criado por [Gezine](https://github.com/Gezine). O projeto de origem é disponibilizado sob a [licença MIT](https://github.com/Gezine/Y2JB/blob/main/LICENSE).
+```bash
+python -m unittest discover -s tests -v
+```
 
-## Aviso
+## Licen?as e cr?ditos
 
-Use este aplicativo somente em consoles, redes e ambientes para os quais você tenha autorização.
+- O envio TCP original foi baseado no `payload_sender.py` do projeto Y2JB, de Gezine, sob licen?a MIT.
+- FTP usa a biblioteca padr?o `ftplib`.
+- A convers?o JXR usa o pacote `jpegxr` 0.3.0 (wrapper BSD-3-Clause) e a biblioteca `jxrlib`; os avisos/licen?as est?o em `assets/LICENSE-jpegxr.md` e `assets/LICENSE-jxrlib.json`.
+
+Use o aplicativo apenas em consoles, redes e ambientes para os quais voc? tenha autoriza??o.

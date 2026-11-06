@@ -1,2 +1,3 @@
 flet==0.28.3
 flet-permission-handler==0.1.0
+flet-webview==0.1.0
