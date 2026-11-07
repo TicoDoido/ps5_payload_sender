@@ -5,6 +5,7 @@ import tempfile
 import urllib.parse
 
 import flet as ft
+import flet_video as ftv
 from flet_permission_handler import PermissionHandler, PermissionType
 
 from payload_sender import send_payload
@@ -17,6 +18,19 @@ try:
     from flet_webview import WebView as FletWebView
 except ImportError:
     FletWebView = None
+
+
+def build_video_player_control(local_path: str, on_error=None):
+    """Create the registered flet-video player for a cached local capture."""
+    return ftv.Video(
+        playlist=[ftv.VideoMedia(resource=local_path)],
+        width=340,
+        height=240,
+        fit=ft.ImageFit.CONTAIN,
+        autoplay=False,
+        show_controls=True,
+        on_error=on_error,
+    )
 
 
 def resolve_android_path(raw_path: str) -> str:
@@ -86,7 +100,7 @@ def main(page: ft.Page):
         on_change=lambda e: page.client_storage.set("ps5_ip", e.control.value),
     )
     port_input = ft.TextField(
-        label="Porta do payload", value=saved_port, width=145,
+        label="Porta do payload", value=saved_port, expand=True,
         prefix_icon=ft.Icons.NUMBERS,
         on_change=lambda e: page.client_storage.set("ps5_port", e.control.value),
     )
@@ -149,14 +163,24 @@ def main(page: ft.Page):
                     icon, icon_color = ft.Icons.DESCRIPTION, ft.Colors.GREEN_400
                 else:
                     icon, icon_color = ft.Icons.MEMORY, ft.Colors.CYAN_400
-                payloads_list.controls.append(ft.Card(content=ft.ListTile(
-                    leading=ft.Icon(icon, color=icon_color, size=30),
-                    title=ft.Text(item["name"], weight=ft.FontWeight.W_600, selectable=True),
-                    subtitle=ft.Text(f"{ext.upper()} • {format_size(item['size'])}", size=12, color=ft.Colors.GREY_400),
-                    trailing=ft.ElevatedButton(
-                        "Enviar", icon=ft.Icons.SEND,
-                        on_click=lambda _, file_item=item: send_payload_to_ps5(file_item),
-                    ),
+                payloads_list.controls.append(ft.Card(content=ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Icon(icon, color=icon_color, size=28),
+                            ft.Column([
+                                ft.Text(item["name"], weight=ft.FontWeight.W_600,
+                                        selectable=True, max_lines=3,
+                                        overflow=ft.TextOverflow.ELLIPSIS),
+                                ft.Text(f"{ext.upper()} • {format_size(item['size'])}",
+                                        size=12, color=ft.Colors.GREY_400),
+                            ], expand=True, spacing=2),
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Row([ft.ElevatedButton(
+                            "Enviar payload", icon=ft.Icons.SEND, expand=True,
+                            on_click=lambda _, file_item=item: send_payload_to_ps5(file_item),
+                        )], spacing=0),
+                    ], spacing=8),
+                    padding=12,
                 )))
         page.update()
 
@@ -250,7 +274,10 @@ def main(page: ft.Page):
     payload_panel = ft.Column([
         ft.Card(content=ft.Container(content=ft.Column([
             ft.Row([ft.Icon(ft.Icons.ROUTER, color=ft.Colors.BLUE_400), ft.Text("Conexão do payload", size=16, weight=ft.FontWeight.BOLD)]),
-            ft.Row([ip_input, port_input], wrap=True),
+            ft.Column([
+                ft.Row([ip_input], spacing=0),
+                ft.Row([port_input], spacing=0),
+            ], spacing=8),
             ft.Text("Porta comum do ELF loader: 9021. O receptor precisa estar ativo no PS5.", size=11, color=ft.Colors.GREY_400),
         ], spacing=10), padding=14)),
         ft.Card(content=ft.Container(content=ft.Column([
@@ -262,10 +289,12 @@ def main(page: ft.Page):
                 ft.TextButton("Download", on_click=lambda _: scan_directory("/storage/emulated/0/Download")),
                 ft.TextButton("Documents", on_click=lambda _: scan_directory("/storage/emulated/0/Documents")),
             ], wrap=True),
-            ft.Row([
-                ft.ElevatedButton("Abrir seletor de pasta", icon=ft.Icons.FOLDER_OPEN, on_click=pick_payload_folder, expand=True),
-                ft.ElevatedButton("Escolher arquivos", icon=ft.Icons.FILE_UPLOAD, on_click=pick_payload_files, expand=True),
-            ], wrap=True),
+            ft.Column([
+                ft.Row([ft.ElevatedButton("Abrir seletor de pasta", icon=ft.Icons.FOLDER_OPEN,
+                                          on_click=pick_payload_folder, expand=True)], spacing=0),
+                ft.Row([ft.ElevatedButton("Escolher arquivos", icon=ft.Icons.FILE_UPLOAD,
+                                          on_click=pick_payload_files, expand=True)], spacing=0),
+            ], spacing=8),
         ], spacing=10), padding=14)),
         ft.Container(content=ft.Row([progress_ring, status_text], alignment=ft.MainAxisAlignment.CENTER), padding=6),
         count_text, search_input, payloads_list,
@@ -273,17 +302,17 @@ def main(page: ft.Page):
 
     # -------------------------------- FTP --------------------------------
     ftp_ip_input = ft.TextField(
-        label="IP do FTP", value=saved_ftp_ip, width=180,
+        label="IP do FTP", value=saved_ftp_ip, expand=True,
         prefix_icon=ft.Icons.WIFI,
         on_change=lambda e: page.client_storage.set("ps5_ftp_ip", e.control.value),
     )
     ftp_port_input = ft.TextField(
-        label="Porta FTP", value=saved_ftp_port, width=120,
+        label="Porta FTP", value=saved_ftp_port, expand=True,
         keyboard_type=ft.KeyboardType.NUMBER,
         on_change=lambda e: page.client_storage.set("ps5_ftp_port", e.control.value),
     )
     ftp_user_input = ft.TextField(
-        label="Usuário", value=saved_ftp_user, width=145,
+        label="Usuário", value=saved_ftp_user, expand=True,
         on_change=lambda e: page.client_storage.set("ps5_ftp_user", e.control.value),
     )
     ftp_password_input = ft.TextField(label="Senha", password=True, can_reveal_password=True, expand=True)
@@ -292,7 +321,7 @@ def main(page: ft.Page):
         f"FTP desconectado. Destino: {saved_ftp_ip}:{saved_ftp_port}.",
         size=12, color=ft.Colors.GREY_400,
     )
-    ftp_list = ft.ListView(spacing=5, height=390, divider_thickness=1)
+    ftp_list = ft.ListView(spacing=8, height=520, divider_thickness=1)
 
     def create_ftp_client() -> PS5FTPClient:
         host, port_text = ftp_ip_input.value.strip(), ftp_port_input.value.strip()
@@ -386,10 +415,21 @@ def main(page: ft.Page):
                     trailing = ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip="Baixar para o celular", on_click=lambda _, item=entry: download_ftp_entry(item))
                     subtitle = format_size(entry.size)
                     action = lambda _, item=entry: download_ftp_entry(item)
-                ftp_list.controls.append(ft.Card(content=ft.ListTile(
-                    leading=leading, title=ft.Text(entry.name, selectable=True),
-                    subtitle=ft.Text(subtitle, size=12, color=ft.Colors.GREY_400),
-                    trailing=trailing, on_click=action,
+                ftp_list.controls.append(ft.Card(content=ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            leading,
+                            ft.Text(entry.name, selectable=True, expand=True,
+                                    max_lines=3, overflow=ft.TextOverflow.ELLIPSIS),
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Text(subtitle, size=12, color=ft.Colors.GREY_400),
+                        ft.Row([ft.ElevatedButton(
+                            "Abrir pasta" if entry.is_dir else "Baixar arquivo",
+                            icon=ft.Icons.FOLDER_OPEN if entry.is_dir else ft.Icons.DOWNLOAD,
+                            on_click=action, expand=True,
+                        )], spacing=0),
+                    ], spacing=6),
+                    padding=10,
                 )))
         except Exception as ex:
             ftp_status.value = (
@@ -437,11 +477,18 @@ def main(page: ft.Page):
     ftp_panel = ft.Column([
         ft.Text("Gerenciador de arquivos do PS5", size=17, weight=ft.FontWeight.BOLD),
         ft.Text("FTP comum não é criptografado. Use apenas na sua rede local confiável.", size=12, color=ft.Colors.AMBER_200),
-        ft.Row([ftp_ip_input, ftp_port_input, ftp_user_input, ftp_password_input], wrap=True),
-        ft.Row([
-            ft.ElevatedButton("Conectar / atualizar", icon=ft.Icons.WIFI, on_click=load_ftp_directory),
-            ft.OutlinedButton("Enviar arquivo(s)", icon=ft.Icons.UPLOAD_FILE, on_click=pick_ftp_upload),
-        ], wrap=True),
+        ft.Column([
+            ft.Row([ftp_ip_input], spacing=0),
+            ft.Row([ftp_port_input], spacing=0),
+            ft.Row([ftp_user_input], spacing=0),
+            ft.Row([ftp_password_input], spacing=0),
+        ], spacing=8),
+        ft.Column([
+            ft.Row([ft.ElevatedButton("Conectar / atualizar", icon=ft.Icons.WIFI,
+                                      on_click=load_ftp_directory, expand=True)], spacing=0),
+            ft.Row([ft.OutlinedButton("Enviar arquivo(s)", icon=ft.Icons.UPLOAD_FILE,
+                                      on_click=pick_ftp_upload, expand=True)], spacing=0),
+        ], spacing=8),
         ft.Row([ftp_path_input, ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip="Pasta acima", on_click=go_to_parent_ftp)]),
         ftp_status, ftp_list,
     ], spacing=10, scroll=ft.ScrollMode.AUTO)
@@ -580,10 +627,12 @@ def main(page: ft.Page):
                     ),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True)
             elif ext in (".mp4", ".webm"):
-                preview = ft.Video(
-                    playlist=[ft.VideoMedia(resource=local_path)],
-                    width=340, height=240, fit=ft.ImageFit.CONTAIN,
-                    autoplay=False, show_controls=True,
+                preview = build_video_player_control(
+                    local_path,
+                    on_error=lambda event: show_snack(
+                        f"Falha ao reproduzir o vídeo: {event.data or 'erro não informado'}",
+                        is_error=True,
+                    ),
                 )
             else:
                 preview = ft.Text("Formato sem pr?-visualiza??o dispon?vel.")

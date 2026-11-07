@@ -18,7 +18,10 @@ class JXRPreviewTests(unittest.TestCase):
             source.write_bytes(b"sample-jxr-bytes")
             page = build_jxr_viewer_html(str(source), "A Quiet Place: The Road Ahead", result_token="preview42")
 
-        self.assertIn("jpegxr()", page)
+        self.assertIn("jpegxr({ wasmBinary })", page)
+        self.assertIn('const wasmBinary = Uint8Array.from(atob(wasmEncoded)', page)
+        self.assertIn('var wasmBinaryFile="";', page)
+        self.assertNotIn('var wasmBinaryFile="data:application/octet-stream;base64,', page)
         self.assertIn("A Quiet Place: The Road Ahead", page)
         self.assertIn("c2FtcGxlLWp4ci1ieXRlcw==", page)
         self.assertIn('output[target + 3] = 255;', page)

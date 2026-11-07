@@ -4,6 +4,7 @@ import base64
 import html
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -32,6 +33,21 @@ def build_jxr_viewer_html(
 
     jxr_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
     decoder_js = bundle_path.read_text(encoding="utf-8")
+    wasm_match = re.search(
+        r'var wasmBinaryFile="data:application/octet-stream;base64,([^"]+)";',
+        decoder_js,
+    )
+    if not wasm_match:
+        raise ValueError("O binário WebAssembly do decoder JPEG XR não foi encontrado.")
+    wasm_base64 = wasm_match.group(1)
+    decoder_js, replacements = re.subn(
+        r'var wasmBinaryFile="data:application/octet-stream;base64,[^"]+";',
+        'var wasmBinaryFile="";',
+        decoder_js,
+        count=1,
+    )
+    if replacements != 1:
+        raise ValueError("Não foi possível preparar o binário WebAssembly do decoder.")
     decoder_js = decoder_js.replace("</script", "<\\/script")
     safe_name = html.escape(display_name or path.name)
 
@@ -62,6 +78,7 @@ __DECODER_JS__
 <script>
 (async function () {
   const encoded = "__JXR_BASE64__";
+  const wasmEncoded = "__WASM_BASE64__";
   const status = document.getElementById("status");
   const errorBox = document.getElementById("error");
   const canvas = document.getElementById("preview");
@@ -95,8 +112,18 @@ __DECODER_JS__
     const input = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) input[i] = binary.charCodeAt(i);
 
-    status.textContent = "Abrindo o decodificador JPEG XR…";
-    const decoder = await jpegxr();
+    status.textContent = "Preparando o decoder JPEG XR...";
+    // Pass the embedded WASM bytes directly. Android WebView can reject fetch(data:...).
+    const wasmBinary = Uint8Array.from(atob(wasmEncoded), ch => ch.charCodeAt(0));
+    const decoderPromise = jpegxr({ wasmBinary });
+    const decoder = await Promise.race([
+      decoderPromise,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error("Tempo esgotado ao inicializar o decoder JPEG XR.")),
+        60000
+      ))
+    ]);
+    status.textContent = "Decodificando a captura JPEG XR...";
     const image = decoder.decode(input);
     const info = image.pixelInfo;
 
@@ -230,6 +257,7 @@ __DECODER_JS__
         page.replace("__DISPLAY_NAME__", safe_name)
         .replace("__DECODER_JS__", decoder_js)
         .replace("__JXR_BASE64__", jxr_b64)
+        .replace("__WASM_BASE64__", wasm_base64)
         .replace("__RESULT_TOKEN__", result_token)
     )
 

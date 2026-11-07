@@ -60,6 +60,31 @@ class MobileLayoutTests(unittest.TestCase):
             self.assertIsInstance(tab.content, ft.Column)
             self.assertEqual(tab.content.scroll, ft.ScrollMode.AUTO)
 
+    def test_mobile_payload_and_ftp_forms_stack_fields_vertically(self):
+        page = FakePage(ft.PagePlatform.ANDROID)
+        main.main(page)
+        tabs = page.controls[0].controls[0]
+        payload_panel = tabs.tabs[0].content
+        payload_card = payload_panel.controls[0]
+        payload_content = payload_card.content.content
+        payload_fields = payload_content.controls[1]
+        self.assertIsInstance(payload_fields, ft.Column)
+        self.assertEqual(len(payload_fields.controls), 2)
+        self.assertTrue(all(isinstance(row, ft.Row) for row in payload_fields.controls))
+
+        ftp_panel = tabs.tabs[1].content
+        ftp_fields = ftp_panel.controls[2]
+        self.assertIsInstance(ftp_fields, ft.Column)
+        self.assertEqual(len(ftp_fields.controls), 4)
+        self.assertTrue(all(isinstance(row, ft.Row) for row in ftp_fields.controls))
+
+    def test_video_preview_uses_registered_flet_video_extension(self):
+        player = main.build_video_player_control("/data/user/0/app/cache/capture.mp4")
+        self.assertEqual(player._get_control_name(), "video")
+        self.assertEqual(player.playlist[0].resource, "/data/user/0/app/cache/capture.mp4")
+        self.assertTrue(player.show_controls)
+        self.assertFalse(player.autoplay)
+
     def test_windows_layout_uses_same_tab_container(self):
         page = FakePage(ft.PagePlatform.WINDOWS)
         main.main(page)
