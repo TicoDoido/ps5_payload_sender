@@ -7,6 +7,9 @@ import os
 import re
 from pathlib import Path
 
+MAX_PNG_BASE64_CHARS = 64 * 1024 * 1024
+MAX_PNG_TRANSFER_CHUNKS = 4096
+
 
 def build_jxr_viewer_html(
     jxr_path: str, display_name: str | None = None, result_token: str = "preview"
@@ -107,6 +110,34 @@ __DECODER_JS__
     return Math.max(0, Math.min(255, Math.round(mapped * 255)));
   }
 
+  // SMPTE ST 2084 (PQ): encoded value -> luminance as a fraction of 10,000 nits.
+  function pqEotf(value) {
+    const m1 = 2610 / 16384;
+    const m2 = 2523 / 4096 * 128;
+    const c1 = 3424 / 4096;
+    const c2 = 2413 / 4096 * 32;
+    const c3 = 2392 / 4096 * 32;
+    const n = Math.max(0, Math.min(1, value));
+    const np = Math.pow(n, 1 / m2);
+    const den = c2 - c3 * np;
+    if (den <= 0) return 0;
+    return Math.pow(Math.max(0, np - c1) / den, 1 / m1);
+  }
+
+  function rec2020ToRec709(r, g, b) {
+    return [
+      1.6605 * r - 0.5876 * g - 0.0728 * b,
+      -0.1246 * r + 1.1329 * g - 0.0083 * b,
+      -0.0182 * r - 0.1006 * g + 1.1187 * b
+    ];
+  }
+
+  function reinhardExtended(value, white) {
+    const w2 = white * white;
+    const c = Math.max(0, value);
+    return (c * (1 + c / w2)) / (1 + c);
+  }
+
   try {
     const binary = atob(encoded);
     const input = new Uint8Array(binary.length);
@@ -183,64 +214,146 @@ __DECODER_JS__
       }
     }
 
-    const scale = Math.min(1, 1280 / image.width, 900 / image.height);
+    const isSdr8 = bitDepth === "8";
+    const isPqInteger = bitDepth === "10" || bitDepth === "16";
+    const isScRgb = bitDepth === "16Float" || bitDepth === "32Float" ||
+                    bitDepth === "16Fixed" || bitDepth === "32Fixed";
+    if (!isSdr8 && !isPqInteger && !isScRgb) {
+      throw new Error("Formato JPEG XR sem perfil de cor validado: " + bitDepth);
+    }
+
+    function readSourceRgb(pixelIndex) {
+      return [
+        componentAt(pixelIndex, info.bgr ? 2 : 0),
+        componentAt(pixelIndex, 1),
+        componentAt(pixelIndex, info.bgr ? 0 : 2)
+      ];
+    }
+
+    // PS5Upload's PS5-specific pipeline: 8-bit RGB is already display-referred
+    // sRGB and must pass through untouched. 10/16-bit integer data is PQ/BT.2020;
+    // half/float/fixed data is linear scRGB. Never apply gamma twice to SDR.
+    function readLinearRgb(pixelIndex) {
+      const rgb = readSourceRgb(pixelIndex);
+      if (isPqInteger) {
+        const r = pqEotf(rgb[0]) * 100;
+        const g = pqEotf(rgb[1]) * 100;
+        const b = pqEotf(rgb[2]) * 100;
+        return rec2020ToRec709(r, g, b);
+      }
+      return rgb;
+    }
+
+    // Full-resolution export canvas. The visible preview is separately scaled;
+    // PNG export therefore contains only the screenshot pixels, never page chrome.
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = image.width;
+    exportCanvas.height = image.height;
+    const exportContext = exportCanvas.getContext("2d", { alpha: false });
+    if (!exportContext) throw new Error("Nao foi possivel criar a imagem de exportacao.");
+    let peak = 1.0;
+
+    if (!isSdr8) {
+      status.textContent = "Analisando luminancia HDR " + image.width + " x " + image.height + "...";
+      for (let pixel = 0; pixel < pixelCount; pixel++) {
+        const rgb = readLinearRgb(pixel);
+        peak = Math.max(peak, rgb[0], rgb[1], rgb[2]);
+      }
+    }
+
+    status.textContent = "Convertendo " + image.width + " x " + image.height + " pixels...";
+    // Work in 64-row strips to avoid a second full-size RGBA ImageData allocation.
+    const stripHeight = 64;
+    for (let startY = 0; startY < image.height; startY += stripHeight) {
+      const rows = Math.min(stripHeight, image.height - startY);
+      const strip = exportContext.createImageData(image.width, rows);
+      const output = strip.data;
+      for (let y = 0; y < rows; y++) {
+        const rowStart = (startY + y) * image.width;
+        for (let x = 0; x < image.width; x++) {
+          const pixel = rowStart + x;
+          let r, g, b;
+          if (isSdr8) {
+            // Already encoded 8-bit SDR: only reorder BGR -> RGB and preserve values.
+            const rgb = readSourceRgb(pixel);
+            r = Math.round(Math.max(0, Math.min(1, rgb[0])) * 255);
+            g = Math.round(Math.max(0, Math.min(1, rgb[1])) * 255);
+            b = Math.round(Math.max(0, Math.min(1, rgb[2])) * 255);
+          } else {
+            const rgb = readLinearRgb(pixel);
+            r = srgbByte(reinhardExtended(rgb[0], peak));
+            g = srgbByte(reinhardExtended(rgb[1], peak));
+            b = srgbByte(reinhardExtended(rgb[2], peak));
+          }
+          const target = (y * image.width + x) * 4;
+          output[target] = r;
+          output[target + 1] = g;
+          output[target + 2] = b;
+          // PS5 captures expose an all-zero alpha plane; screenshots are opaque.
+          output[target + 3] = 255;
+        }
+      }
+      exportContext.putImageData(strip, 0, startY);
+    }
+
+    const scale = Math.min(1, 1280 / image.width, 720 / image.height);
     const outWidth = Math.max(1, Math.round(image.width * scale));
     const outHeight = Math.max(1, Math.round(image.height * scale));
     canvas.width = outWidth;
     canvas.height = outHeight;
-
     const context = canvas.getContext("2d", { alpha: false });
-    const pixels = context.createImageData(outWidth, outHeight);
-    const output = pixels.data;
-    const hdr = bitDepth === "16Float" || bitDepth === "32Float" ||
-                bitDepth === "16Fixed" || bitDepth === "32Fixed";
-
-    status.textContent = "Convertendo " + image.width + " × " + image.height + " para JPEG…";
-    for (let y = 0; y < outHeight; y++) {
-      const sourceY = Math.min(image.height - 1, Math.floor(y / scale));
-      for (let x = 0; x < outWidth; x++) {
-        const sourceX = Math.min(image.width - 1, Math.floor(x / scale));
-        const sourcePixel = sourceY * image.width + sourceX;
-
-        let r = componentAt(sourcePixel, info.bgr ? 2 : 0);
-        let g = componentAt(sourcePixel, 1);
-        let b = componentAt(sourcePixel, info.bgr ? 0 : 2);
-        let a = info.hasAlpha ? componentAt(sourcePixel, 3) : 1;
-
-        if (info.premultipledAlpha && a > 0) {
-          r /= a; g /= a; b /= a;
-        }
-
-        if (hdr) {
-          const luminance = Math.max(0, 0.2126 * r + 0.7152 * g + 0.0722 * b);
-          const white = 4.0;
-          const toneScale = luminance > 0
-            ? (1 + luminance / (white * white)) / (1 + luminance)
-            : 0;
-          r *= toneScale; g *= toneScale; b *= toneScale;
-        }
-
-        const target = (y * outWidth + x) * 4;
-        output[target] = srgbByte(r);
-        output[target + 1] = srgbByte(g);
-        output[target + 2] = srgbByte(b);
-        // PS5 capture JXR files expose an all-zero alpha plane even though the screenshot is opaque.
-      // Force opacity so WebView does not render a transparent/black preview.
-      output[target + 3] = 255;
-      }
-    }
-
-    context.putImageData(pixels, 0, 0);
-    jpegUrl = canvas.toDataURL("image/jpeg", 0.90);
-    status.textContent = "Prévia SDR pronta · " + outWidth + " × " + outHeight +
-                         (hdr ? " · HDR convertido para SDR" : " · SDR");
+    context.drawImage(exportCanvas, 0, 0, outWidth, outHeight);
+    jpegUrl = canvas.toDataURL("image/jpeg", 0.92);
+    status.textContent = "Previa " + outWidth + "x" + outHeight + " - captura original " +
+                         image.width + "x" + image.height + (isSdr8 ? " - SDR 8-bit preservado" : " - HDR convertido para SDR");
     console.log("PS5_JXR_PREVIEW:__RESULT_TOKEN__:" + jpegUrl.split(",", 2)[1]);
 
-    // Invoked by the native Flet button; PNG is lossless at the reduced SDR preview resolution.
+    // Transfer the full-resolution PNG in bounded console events. A single
+    // large console message can be truncated by Android WebView / Flutter.
     window.ps5SavePng = function () {
-      status.textContent = "Gerando PNG SDR…";
-      const pngBase64 = canvas.toDataURL("image/png").split(",", 2)[1];
-      console.log("PS5_JXR_SAVE_PNG:__RESULT_TOKEN__:" + pngBase64);
+      status.textContent = "Gerando PNG " + image.width + " x " + image.height + "...";
+      exportCanvas.toBlob(function (blob) {
+        if (!blob) {
+          console.log("PS5_JXR_ERROR:__RESULT_TOKEN__:O WebView nao conseguiu gerar o PNG.");
+          return;
+        }
+        const reader = new FileReader();
+        reader.onerror = function () {
+          console.log("PS5_JXR_ERROR:__RESULT_TOKEN__:Falha ao ler o PNG gerado.");
+        };
+        reader.onload = function () {
+          const dataUrl = String(reader.result || "");
+          const comma = dataUrl.indexOf(",");
+          if (comma < 0) {
+            console.log("PS5_JXR_ERROR:__RESULT_TOKEN__:Dados PNG invalidos.");
+            return;
+          }
+          const payload = dataUrl.slice(comma + 1);
+          const chunkSize = 16384;
+          const chunkCount = Math.ceil(payload.length / chunkSize);
+          if (!payload.length || payload.length > 67108864 || chunkCount > 4096) {
+            console.log("PS5_JXR_ERROR:__RESULT_TOKEN__:PNG excede o limite de transferencia do aplicativo.");
+            return;
+          }
+          console.log("PS5_JXR_SAVE_START:__RESULT_TOKEN__:" + payload.length + ":" + chunkCount);
+          let index = 0;
+          function sendChunkBatch() {
+            const batchEnd = Math.min(index + 32, chunkCount);
+            while (index < batchEnd) {
+              console.log("PS5_JXR_SAVE_CHUNK:__RESULT_TOKEN__:" + index + ":" +
+                          payload.slice(index * chunkSize, (index + 1) * chunkSize));
+              index++;
+            }
+            if (index < chunkCount) {
+              setTimeout(sendChunkBatch, 0);
+            } else {
+              console.log("PS5_JXR_SAVE_END:__RESULT_TOKEN__:" + chunkCount);
+            }
+          }
+          setTimeout(sendChunkBatch, 0);
+        };
+        reader.readAsDataURL(blob);
+      }, "image/png");
     };
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
@@ -277,12 +390,28 @@ def decode_jpeg_preview_base64(payload: str) -> bytes:
 
 def decode_png_preview_base64(payload: str) -> bytes:
     """Validate and decode a PNG emitted by the local WebView preview."""
-    if not payload or len(payload) > 24 * 1024 * 1024:
-        raise ValueError("Preview PNG is empty or exceeds the allowed size.")
+    if not payload or len(payload) > MAX_PNG_BASE64_CHARS:
+        raise ValueError("O PNG estÃ¡ vazio ou excede 48 MB de dados binÃ¡rios.")
     try:
         data = base64.b64decode(payload, validate=True)
     except (ValueError, base64.binascii.Error) as exc:
-        raise ValueError("The WebView sent invalid PNG data.") from exc
+        raise ValueError("O WebView enviou dados PNG invÃ¡lidos.") from exc
     if len(data) < 24 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("The received content is not a valid PNG.")
+        raise ValueError("O conteÃºdo recebido nÃ£o Ã© um PNG vÃ¡lido.")
     return data
+
+
+def assemble_png_preview_chunks(chunks: list[str | None], expected_length: int) -> bytes:
+    """Join the ordered WebView chunks and validate the resulting full-resolution PNG."""
+    if not chunks or len(chunks) > MAX_PNG_TRANSFER_CHUNKS:
+        raise ValueError("Quantidade de blocos PNG invÃ¡lida.")
+    if not isinstance(expected_length, int) or not 1 <= expected_length <= MAX_PNG_BASE64_CHARS:
+        raise ValueError("Tamanho declarado do PNG invÃ¡lido.")
+    if any(not isinstance(chunk, str) for chunk in chunks):
+        raise ValueError("A transferÃªncia do PNG estÃ¡ incompleta.")
+    payload = "".join(chunks)
+    if len(payload) != expected_length:
+        raise ValueError(
+            f"TransferÃªncia incompleta: {len(payload)} de {expected_length} caracteres."
+        )
+    return decode_png_preview_base64(payload)

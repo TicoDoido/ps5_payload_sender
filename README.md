@@ -21,8 +21,10 @@ Aplicativo Android em Flet para enviar payloads ao PS5, transferir arquivos por 
 - Agrupa cada m?dia com os arquivos `.dat` e `.meta` de mesmo nome-base, sem listar os sidecars como capturas separadas.
 - L? o nome do jogo do `.dat`, e a data/vers?o do jogo do `.meta`.
 - Mostra miniaturas JPEG nativas dos v?deos e converte as miniaturas JPEG XR das fotos no pr?prio celular; os layouts RGB de 8-bit e RGB101010 de 10-bit s?o suportados.
-- Abre fotos JXR em um WebView Android, converte uma vers?o de visualiza??o para JPEG/SDR e oferece um bot?o para salvar esse JPEG no telefone.
-- A a??o de download separada baixa o `.jxr` original; os arquivos do PS5 n?o s?o modificados.
+- Decodifica capturas JXR no Android com tratamento por formato: SDR 8-bit preservado, RGB inteiro 10/16-bit interpretado como PQ/BT.2020 e scRGB float/fixed convertido para SDR.
+- A previa e enviada como imagem isolada, sem moldura HTML; a exportacao PNG usa a resolucao original da captura (incluindo 3840x2160), sem reduzir para o tamanho da previa.
+- A exporta??o PNG ? transferida em blocos pelo WebView para evitar mensagens grandes truncadas. O JXR original permanece dispon?vel para download e nunca ? alterado.
+- A classificacao dos formatos e o fluxo de cores foram conferidos com a referencia publica [PS5Upload](https://github.com/phantomptr/ps5upload/blob/main/client/src-tauri/src/commands/screenshot_convert.rs); o processamento deste aplicativo foi implementado localmente.
 - Diret?rio inicial de fotos: `/user/av_contents/photo/NPXS40087`.
 - Diret?rio inicial de v?deos: `/user/av_contents/video/NPXS40087`.
 

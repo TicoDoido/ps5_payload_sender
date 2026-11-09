@@ -11,7 +11,13 @@ from flet_permission_handler import PermissionHandler, PermissionType
 from payload_sender import send_payload
 from ps5_ftp import FTPEntry, PS5FTPClient
 from ps5_media import build_capture_details
-from jxr_preview import (build_jxr_viewer_html, decode_jpeg_preview_base64, decode_png_preview_base64)
+from jxr_preview import (
+    MAX_PNG_BASE64_CHARS,
+    MAX_PNG_TRANSFER_CHUNKS,
+    assemble_png_preview_chunks,
+    build_jxr_viewer_html,
+    decode_jpeg_preview_base64,
+)
 from jxr_thumbnails import build_jxr_thumbnails_html
 
 try:
@@ -530,7 +536,7 @@ def main(page: ft.Page):
         if gallery_thumb_webview is None:
             show_snack("O conversor JXR n?o est? dispon?vel neste aparelho.", is_error=True)
             return
-        pending["status"].value = "Gerando PNG SDR da prévia…"
+        pending["status"].value = "Gerando PNG na resolução original..."
         pending["save_button"].disabled = True
         page.update()
         try:
@@ -556,17 +562,17 @@ def main(page: ft.Page):
                 ).hexdigest()[:20]
                 jxr_html = build_jxr_viewer_html(local_path, entry.name, result_token=token)
                 preview_image = ft.Image(
-                    src="", width=340, height=320, fit=ft.ImageFit.CONTAIN,
+                    src="", width=340, height=191, fit=ft.ImageFit.CONTAIN,
                     visible=False,
                     error_content=ft.Text("N?o foi poss?vel exibir a imagem convertida."),
                 )
                 preview_progress = ft.ProgressRing(width=28, height=28, stroke_width=3)
                 preview_status = ft.Text(
-                    "Decodificando a captura JXR 4K e preparando uma pr?via compat?vel?",
+                    "Decodificando JXR e preparando a pré-visualização...",
                     size=12, text_align=ft.TextAlign.CENTER,
                 )
                 save_button = ft.ElevatedButton(
-                    "Salvar PNG SDR no celular", icon=ft.Icons.IMAGE,
+                    "Salvar PNG (resolução nativa)", icon=ft.Icons.IMAGE,
                     disabled=True,
                     on_click=lambda _, t=token: save_jxr_preview_png(t),
                 )
@@ -752,7 +758,7 @@ def main(page: ft.Page):
                 pending["image"].src = local_path
                 pending["image"].visible = True
                 pending["progress"].visible = False
-                pending["status"].value = "Prévia SDR pronta (até 1280×720). O JXR HDR original continua intacto."
+                pending["status"].value = "Pré-visualização pronta. O PNG usa a resolução nativa, sem bordas HTML."
                 pending["save_button"].disabled = False
                 pending["preview_path"] = local_path
                 page.update()
@@ -760,18 +766,78 @@ def main(page: ft.Page):
                 pending = gallery_preview_pending.get(token) if token else None
                 if pending:
                     pending["progress"].visible = False
-                    pending["status"].value = f"Falha na pr?via JXR: {ex}"
+                    pending["status"].value = f"Falha na prévia JXR: {ex}"
                     page.update()
                 else:
                     show_snack(f"Falha ao montar a pr?via JXR: {ex}", is_error=True)
-        elif message.startswith("PS5_JXR_SAVE_PNG:"):
+        elif message.startswith("PS5_JXR_SAVE_START:"):
             token = ""
             try:
-                _, token, payload = message.split(":", 2)
+                _, token, length_text, count_text = message.split(":", 3)
                 pending = gallery_preview_pending.get(token)
                 if not pending:
                     return
-                png_data = decode_png_preview_base64(payload.strip())
+                expected_length = int(length_text)
+                chunk_count = int(count_text)
+                if not 1 <= expected_length <= MAX_PNG_BASE64_CHARS:
+                    raise ValueError("Tamanho declarado do PNG excede o limite permitido.")
+                if not 1 <= chunk_count <= MAX_PNG_TRANSFER_CHUNKS:
+                    raise ValueError("Quantidade de blocos PNG invÃ¡lida.")
+                if chunk_count != (expected_length + 16383) // 16384:
+                    raise ValueError("CabeÃ§alho da transferÃªncia PNG inconsistente.")
+                pending["png_chunks"] = [None] * chunk_count
+                pending["png_expected_length"] = expected_length
+                pending["png_received_length"] = 0
+                pending["status"].value = "Recebendo PNG em resoluÃ§Ã£o original..."
+                page.update()
+            except Exception as ex:
+                pending = gallery_preview_pending.get(token) if token else None
+                if pending:
+                    pending.pop("png_chunks", None)
+                    pending["save_button"].disabled = False
+                    pending["status"].value = f"Falha ao iniciar a transferÃªncia PNG: {ex}"
+                    page.update()
+        elif message.startswith("PS5_JXR_SAVE_CHUNK:"):
+            token = ""
+            try:
+                _, token, index_text, payload = message.split(":", 3)
+                pending = gallery_preview_pending.get(token)
+                if not pending or "png_chunks" not in pending:
+                    return
+                index = int(index_text)
+                chunks = pending["png_chunks"]
+                if not 0 <= index < len(chunks) or not payload or len(payload) > 16384:
+                    raise ValueError("Bloco PNG invÃ¡lido.")
+                previous = chunks[index]
+                if previous is None:
+                    chunks[index] = payload
+                    pending["png_received_length"] += len(payload)
+                elif previous != payload:
+                    raise ValueError("Bloco PNG duplicado com conteÃºdo diferente.")
+                if pending["png_received_length"] > pending["png_expected_length"]:
+                    raise ValueError("A transferÃªncia PNG excedeu o tamanho declarado.")
+                if index % 64 == 63:
+                    received = sum(1 for chunk in chunks if chunk is not None)
+                    pending["status"].value = f"Recebendo PNG: {received}/{len(chunks)} blocos..."
+                    page.update()
+            except Exception as ex:
+                pending = gallery_preview_pending.get(token) if token else None
+                if pending:
+                    pending.pop("png_chunks", None)
+                    pending["save_button"].disabled = False
+                    pending["status"].value = f"Falha na transferÃªncia PNG: {ex}"
+                    page.update()
+        elif message.startswith("PS5_JXR_SAVE_END:"):
+            token = ""
+            try:
+                _, token, count_text = message.split(":", 2)
+                pending = gallery_preview_pending.get(token)
+                if not pending or "png_chunks" not in pending:
+                    return
+                chunks = pending["png_chunks"]
+                if int(count_text) != len(chunks):
+                    raise ValueError("Quantidade final de blocos PNG divergente.")
+                png_data = assemble_png_preview_chunks(chunks, pending["png_expected_length"])
                 entry = pending["entry"]
                 file_name = os.path.splitext(entry.name)[0] + ".png"
                 local_path = unique_download_path(file_name)
@@ -779,13 +845,19 @@ def main(page: ft.Page):
                 with open(partial_path, "wb") as output:
                     output.write(png_data)
                 os.replace(partial_path, local_path)
+                pending.pop("png_chunks", None)
+                pending.pop("png_expected_length", None)
+                pending.pop("png_received_length", None)
                 pending["save_button"].disabled = False
-                pending["status"].value = f"PNG salvo no celular: {local_path}"
+                pending["status"].value = f"PNG original salvo ({format_size(len(png_data))}): {local_path}"
                 show_snack(f"PNG salvo em: {local_path}")
                 page.update()
             except Exception as ex:
                 pending = gallery_preview_pending.get(token) if token else None
                 if pending:
+                    pending.pop("png_chunks", None)
+                    pending.pop("png_expected_length", None)
+                    pending.pop("png_received_length", None)
                     pending["save_button"].disabled = False
                     pending["status"].value = f"Falha ao salvar PNG: {ex}"
                     page.update()
@@ -797,7 +869,11 @@ def main(page: ft.Page):
                 pending = gallery_preview_pending.get(token)
                 if pending:
                     pending["progress"].visible = False
-                    pending["status"].value = f"O decoder n?o conseguiu abrir a captura: {error_text}"
+                    pending["save_button"].disabled = not bool(pending.get("preview_path"))
+                    pending.pop("png_chunks", None)
+                    pending.pop("png_expected_length", None)
+                    pending.pop("png_received_length", None)
+                    pending["status"].value = f"O decoder não conseguiu abrir a captura: {error_text}"
                     page.update()
             except ValueError:
                 pass
